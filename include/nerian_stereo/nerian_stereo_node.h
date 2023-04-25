@@ -171,6 +171,8 @@ private:
     double maxDepth;
     bool useQFromCalibFile;
     PointCloudColorMode pointCloudColorMode;
+    std::string leftFrameId;
+    std::string rightFrameId;
 
     // Other members
     int frameNum;

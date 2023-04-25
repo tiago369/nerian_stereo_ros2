@@ -13,6 +13,8 @@ def generate_launch_description():
 
                     {'top_level_frame':               'base_link'},
                     {'internal_frame':                'nerian_stereo'},
+                    {'left_camera_frame':             'left_stereo_link'},
+                    {'right_camera_frame':            'right_stereo_link'},
                     {'ros_coordinate_system':         True},
                     {'ros_timestamps':                True},
 
