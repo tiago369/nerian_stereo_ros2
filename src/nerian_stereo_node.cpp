@@ -263,19 +263,19 @@ void StereoNode::processOneImageSet() {
 
         // Publish image data messages for all images included in the set
         if (imageSet.hasImageType(ImageSet::IMAGE_LEFT)) {
-            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_LEFT), stamp, false, leftImagePublisher);
+            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_LEFT), stamp, false, leftImagePublisher, "left_stereo_link");
             hasLeft = true;
         }
         if (imageSet.hasImageType(ImageSet::IMAGE_DISPARITY)) {
-            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_DISPARITY), stamp, true, disparityPublisher);
+            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_DISPARITY), stamp, true, disparityPublisher, "");
             hasDisparity = true;
         }
         if (imageSet.hasImageType(ImageSet::IMAGE_RIGHT)) {
-            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_RIGHT), stamp, false, rightImagePublisher);
+            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_RIGHT), stamp, false, rightImagePublisher, "right_stereo_link");
             hasRight = true;
         }
         if (imageSet.hasImageType(ImageSet::IMAGE_COLOR)) {
-            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_COLOR), stamp, false, thirdImagePublisher);
+            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_COLOR), stamp, false, thirdImagePublisher, "");
             hasColor = true;
         }
 
@@ -344,14 +344,14 @@ void StereoNode::loadCameraCalibration() {
 }
 
 void StereoNode::publishImageMsg(const ImageSet& imageSet, int imageIndex, rclcpp::Time stamp, bool allowColorCode,
-        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher) {
+        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher, std::string frame_id) {
 
     if(publisher->get_subscription_count() <= 0) {
         return; //No subscribers
     }
 
     cv_bridge::CvImage cvImg;
-    cvImg.header.frame_id = internalFrame;
+    cvImg.header.frame_id = frame_id;
     cvImg.header.stamp = stamp;
     //cvImg.header.seq = imageSet.getSequenceNumber(); // Actually ROS will overwrite this
 
@@ -703,6 +703,7 @@ void StereoNode::publishCameraInfo(rclcpp::Time stamp, const ImageSet& imageSet)
             }
 
             camInfoMsg->left_info.header = camInfoMsg->header;
+            camInfoMsg->left_info.header.frame_id = std::string("left_stereo_link");
             camInfoMsg->left_info.width = sizeVec[0];
             camInfoMsg->left_info.height = sizeVec[1];
             camInfoMsg->left_info.distortion_model = "plumb_bob";
@@ -719,6 +720,7 @@ void StereoNode::publishCameraInfo(rclcpp::Time stamp, const ImageSet& imageSet)
             camInfoMsg->left_info.roi.y_offset = 0;
 
             camInfoMsg->right_info.header = camInfoMsg->header;
+            camInfoMsg->right_info.header.frame_id = std::string("right_stereo_link");
             camInfoMsg->right_info.width = sizeVec[0];
             camInfoMsg->right_info.height = sizeVec[1];
             camInfoMsg->right_info.distortion_model = "plumb_bob";
@@ -739,9 +741,9 @@ void StereoNode::publishCameraInfo(rclcpp::Time stamp, const ImageSet& imageSet)
             readCalibrationArray("R", camInfoMsg->r_left_right);
         }
     }
-
-    double dt = (stamp - lastCamInfoPublish).seconds();
-    if(dt > 1.0) {
+    // double dt = (stamp - lastCamInfoPublish).seconds();
+    double dt = (stamp.seconds() - lastCamInfoPublish.seconds());
+    if(dt > 0.50){
         // Rather use the Q-matrix that we received over the network if it is valid
         const float* qMatrix = imageSet.getQMatrix();
         if(qMatrix[0] != 0.0) {
