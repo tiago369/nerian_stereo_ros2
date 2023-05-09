@@ -193,6 +193,7 @@ void StereoNode::init() {
     this->declare_parameter("q_from_calib_file",             false);
     this->declare_parameter("left_camera_frame",             "left_stereo_link");
     this->declare_parameter("right_camera_frame",            "right_stereo_link");
+    this->declare_parameter("pcl_frame",                     "pcl_link");
 
     onSetParametersCallback = this->add_on_set_parameters_callback(std::bind(&StereoNode::onSetParameters, this, std::placeholders::_1));
 
@@ -224,6 +225,7 @@ void StereoNode::init() {
     useQFromCalibFile = this->get_parameter("q_from_calib_file").as_bool();
     leftFrameId = this->get_parameter("left_camera_frame").as_string();
     rightFrameId = this->get_parameter("right_camera_frame").as_string();
+    pclFrameId = this->get_parameter("pcl_frame").as_string();
 
     lastLogTime = this->get_clock()->now();
 
@@ -300,7 +302,7 @@ void StereoNode::processOneImageSet() {
             hasLeft = true;
         }
         if (imageSet.hasImageType(ImageSet::IMAGE_DISPARITY)) {
-            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_DISPARITY), stamp, true, disparityPublisher, internalFrame);
+            publishImageMsg(imageSet, imageSet.getIndexOf(ImageSet::IMAGE_DISPARITY), stamp, true, disparityPublisher, pclFrameId);
             hasDisparity = true;
         }
         if (imageSet.hasImageType(ImageSet::IMAGE_RIGHT)) {
@@ -501,7 +503,7 @@ void StereoNode::publishPointCloudMsg(ImageSet& imageSet, rclcpp::Time stamp) {
 
     // Create message object and set header
     pointCloudMsg->header.stamp = stamp;
-    pointCloudMsg->header.frame_id = internalFrame;
+    pointCloudMsg->header.frame_id = pclFrameId;
 
     // Copy 3D points
     if(pointCloudMsg->data.size() != imageSet.getWidth()*imageSet.getHeight()*4*sizeof(float)) {

@@ -11,10 +11,11 @@ def generate_launch_description():
                     {'remote_port':                  '7681'},
                     {'use_tcp':                       False},
 
-                    {'top_level_frame':               'base_link'},
+                    {'top_level_frame':               'base_nerian'},
                     {'internal_frame':                'nerian_stereo'},
                     {'left_camera_frame':             'left_stereo_link'},
                     {'right_camera_frame':            'right_stereo_link'},
+                    {'pcl_frame':                     'left_fake_link'},
                     {'ros_coordinate_system':         True},
                     {'ros_timestamps':                True},
 
@@ -24,13 +25,21 @@ def generate_launch_description():
                     {'color_code_legend':             False},
 
                     {'calibration_file':              '/home/subot_focal/subot_ws/src/nerian_stereo_ros2/config/calib.yaml'},
-                    {'q_from_calib_file':             True},
+                    {'q_from_calib_file':             False},
                     {'delay_execution':               0.0},
                     {'use_sim_time': False}
  
                 ],
                 output='screen'
             )
+    camera_info_splitter = Node(
+        package='nerian_stereo',
+        executable='camera_info_splitter',
+        output='screen'
+    )
+    
     ld.add_action(nerian_stereo_node)
+    ld.add_action(camera_info_splitter)
+
     return ld
 

@@ -173,6 +173,7 @@ private:
     PointCloudColorMode pointCloudColorMode;
     std::string leftFrameId;
     std::string rightFrameId;
+    std::string pclFrameId;
 
     // Other members
     int frameNum;
