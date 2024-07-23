@@ -17,8 +17,8 @@ def generate_launch_description():
                     {'ros_timestamps':                True},
 
                     {'max_depth':                     -1},
-                    {'point_cloud_intensity_channel', 'mono8'},
-                    {'color_code_disparity_map',      ''},
+                    {'point_cloud_intensity_channel': 'rgb8'},
+                    {'color_code_disparity_map':      ''},
                     {'color_code_legend':             False},
 
                     {'delay_execution':               0.0},
