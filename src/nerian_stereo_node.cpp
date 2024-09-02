@@ -41,7 +41,7 @@ void StereoNode::updateParametersFromDevice() {
     // We update parameters *from* the device, but also push any parameters
     //  that have been overridden via the ROS config to the device as well.
     try {
-        RCLCPP_INFO(this->get_logger(), "Initializing device parameters");
+        RCLCPP_INFO(this->get_logger(), "Initializing device parameters for host %s", remoteHost.c_str());
         deviceParameters.reset(new DeviceParameters(remoteHost.c_str()));
         auto ssParams = deviceParameters->getParameterSet();
         // The transaction lock transparently batches all updates we push to
@@ -189,6 +189,8 @@ void StereoNode::init() {
     this->declare_parameter("ros_timestamps",                true);
     this->declare_parameter("delay_execution",               0.0);
     this->declare_parameter("max_depth",                     -1);
+    this->declare_parameter("broadcast_transform",           true);
+    this->declare_parameter("publish_imu_data",              false);
 
     onSetParametersCallback = this->add_on_set_parameters_callback(std::bind(&StereoNode::onSetParameters, this, std::placeholders::_1));
 
@@ -207,7 +209,7 @@ void StereoNode::init() {
 
     colorCodeDispMap = this->get_parameter("color_code_disparity_map").as_string();
     colorCodeLegend = this->get_parameter("color_code_legend").as_bool();
-    frame = this->get_parameter("top_level_frame").as_string();
+    topLevelFrame = this->get_parameter("top_level_frame").as_string();
     internalFrame = this->get_parameter("internal_frame").as_string();
     remotePort = this->get_parameter("remote_port").as_string();
     remoteHost = this->get_parameter("remote_host").as_string();
@@ -216,6 +218,8 @@ void StereoNode::init() {
     rosTimestamps  = this->get_parameter("ros_timestamps").as_bool();
     execDelay = this->get_parameter("delay_execution").as_double();
     maxDepth = this->get_parameter("max_depth").as_int();
+    broadcastTransform = this->get_parameter("broadcast_transform").as_bool();
+    publishImuDataActive = this->get_parameter("publish_imu_data").as_bool();
 
     lastLogTime = this->get_clock()->now();
 
@@ -234,9 +238,16 @@ void StereoNode::init() {
     cameraInfoPublisher = this->create_publisher<nerian_stereo::msg::StereoCameraInfo>("/nerian_stereo/stereo_camera_info", 1);
     cloudPublisher = this->create_publisher<sensor_msgs::msg::PointCloud2>("/nerian_stereo/point_cloud", 5);
 
-    transformBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    if (broadcastTransform) {
+        transformBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    }
+
+    if (publishImuDataActive) {
+        imuPublisher = this->create_publisher<sensor_msgs::msg::Imu>("/nerian_stereo/imu", 5);
+    }
+
     currentTransform.header.stamp = this->get_clock()->now();
-    currentTransform.header.frame_id = frame;
+    currentTransform.header.frame_id = topLevelFrame;
     currentTransform.child_frame_id = internalFrame;
     currentTransform.transform.translation.x = 0.0;
     currentTransform.transform.translation.y = 0.0;
@@ -247,6 +258,17 @@ void StereoNode::init() {
     currentTransform.transform.rotation.w = 1.0;
 
     initDataChannelService();
+
+    auto params = deviceParameters->getParameterSet();
+    if (publishImuDataActive) {
+        // Warn if IMU publication is active but all relevant channels turned off on device
+        if (params.count("imu_freq_linaccel")) {
+            if (!(params["imu_freq_linaccel"].getCurrent<int>() || params["imu_freq_linaccel"].getCurrent<int>() || params["imu_freq_linaccel"].getCurrent<int>())) {
+                RCLCPP_WARN(this->get_logger(), "Activated IMU publication, but device IMU channel frequencies are turned to 0.");
+            }
+        }
+    }
+
     //initDynamicReconfigure();
     publishTransform(); // initial transform
     prepareAsyncTransfer();
@@ -330,7 +352,7 @@ void StereoNode::processOneImageSet() {
         }
 
         if(cameraInfoPublisher != NULL && cameraInfoPublisher->get_subscription_count() > 0) {
-            publishCameraInfo(stamp, imageSet);
+            publishCameraInfo(stamp);
         }
 
         // Display some simple statistics
@@ -685,7 +707,7 @@ void StereoNode::initPointCloud() {
     }
 }
 
-void StereoNode::publishCameraInfo(rclcpp::Time stamp, const ImageSet& imageSet) {
+void StereoNode::publishCameraInfo(rclcpp::Time stamp) {
     // Once every second (or on first query)
     double dt = (stamp.get_clock_type()!=lastCamInfoPublish.get_clock_type()) ? 99.9 : (stamp - lastCamInfoPublish).seconds();
     if(dt > 1.0) {
@@ -762,50 +784,143 @@ void StereoNode::processDataChannels() {
         return;
     }
     if (dataChannelService->imuAvailable()) {
-        // Obtain and publish the most recent orientation
-        TimestampedQuaternion tsq = dataChannelService->imuGetRotationQuaternion();
-        currentTransform.header.stamp = now;
-        if(rosCoordinateSystem) {
-            currentTransform.transform.rotation.x = tsq.x();
-            currentTransform.transform.rotation.y = -tsq.z();
-            currentTransform.transform.rotation.z = tsq.y();
-        } else {
-            currentTransform.transform.rotation.x = tsq.x();
-            currentTransform.transform.rotation.y = tsq.y();
-            currentTransform.transform.rotation.z = tsq.z();
+        if (broadcastTransform) {
+            // Obtain and publish the most recent orientation to broadcast 'cooked' orientation
+            TimestampedQuaternion tsq = dataChannelService->imuGetRotationQuaternion();
+            currentTransform.header.stamp = now;
+            if(rosCoordinateSystem) {
+                currentTransform.transform.rotation.x = tsq.x();
+                currentTransform.transform.rotation.y = -tsq.z();
+                currentTransform.transform.rotation.z = tsq.y();
+            } else {
+                currentTransform.transform.rotation.x = tsq.x();
+                currentTransform.transform.rotation.y = tsq.y();
+                currentTransform.transform.rotation.z = tsq.z();
+            }
+            currentTransform.transform.rotation.w = tsq.w();
+
+            /*
+            // DEBUG: Quaternion->Euler + debug output
+            double roll, pitch, yaw;
+            tf2::Quaternion q(tsq.x(), rosCoordinateSystem?(-tsq.z()):tsq.y(), rosCoordinateSystem?tsq.y():tsq.z(), tsq.w());
+            tf2::Matrix3x3 m(q);
+            m.getRPY(roll, pitch, yaw);
+            std::cout << "Orientation:" << std::setprecision(2) << std::fixed << " Roll " << (180.0*roll/M_PI) << " Pitch " << (180.0*pitch/M_PI) << " Yaw " << (180.0*yaw/M_PI) << std::endl;
+            */
+
+            publishTransform();
         }
-        currentTransform.transform.rotation.w = tsq.w();
 
-        /*
-        // DEBUG: Quaternion->Euler + debug output
-        double roll, pitch, yaw;
-        tf2::Quaternion q(tsq.x(), rosCoordinateSystem?(-tsq.z()):tsq.y(), rosCoordinateSystem?tsq.y():tsq.z(), tsq.w());
-        tf2::Matrix3x3 m(q);
-        m.getRPY(roll, pitch, yaw);
-        std::cout << "Orientation:" << std::setprecision(2) << std::fixed << " Roll " << (180.0*roll/M_PI) << " Pitch " << (180.0*pitch/M_PI) << " Yaw " << (180.0*yaw/M_PI) << std::endl;
-        */
+        if (publishImuDataActive) {
+            // 'Raw' IMU data
+            publishImuData();
+        }
 
-        publishTransform();
     } else {
-        // We must periodically republish due to ROS interval constraints
-        /*
-        // DEBUG: Impart a (fake) periodic horizontal swaying motion
-        static double DEBUG_t = 0.0;
-        DEBUG_t += 0.1;
-        tf2::Quaternion q;
-        q.setRPY(0, 0, 0.3*sin(DEBUG_t));
-        currentTransform.transform.rotation.x = q.x();
-        currentTransform.transform.rotation.y = q.y();
-        currentTransform.transform.rotation.z = q.z();
-        currentTransform.transform.rotation.w = q.w();
-        */
-        currentTransform.header.stamp = now;
-        publishTransform();
+        if (broadcastTransform) {
+            // We must periodically republish due to ROS interval constraints
+            /*
+            // DEBUG: Impart a (fake) periodic horizontal swaying motion
+            static double DEBUG_t = 0.0;
+            DEBUG_t += 0.1;
+            tf2::Quaternion q;
+            q.setRPY(0, 0, 0.3*sin(DEBUG_t));
+            currentTransform.transform.rotation.x = q.x();
+            currentTransform.transform.rotation.y = q.y();
+            currentTransform.transform.rotation.z = q.z();
+            currentTransform.transform.rotation.w = q.w();
+            */
+            currentTransform.header.stamp = now;
+            publishTransform();
+        }
     }
 }
 
 void StereoNode::publishTransform() {
     transformBroadcaster->sendTransform(currentTransform);
+}
+
+void StereoNode::publishImuData() {
+    std::vector<TimestampedQuaternion> tsqs = dataChannelService->imuGetRotationQuaternionSeries();
+    std::vector<TimestampedVector> gyrs = dataChannelService->imuGetGyroscopeSeries();
+    std::vector<TimestampedVector> accs = dataChannelService->imuGetLinearAccelerationSeries();
+    TimestampedQuaternion tsq;
+    TimestampedVector gyr;
+    TimestampedVector acc;
+    if (tsqs.size() || gyrs.size() || accs.size()) {
+        // Some new data has arrived, fill in latest data and use most recent reading for missing channels
+        //
+        // Updating:
+        if (tsqs.size()) {
+            tsq = tsqs[tsqs.size()-1]; // most recent reading
+        } else {
+            tsq = dataChannelService->imuGetRotationQuaternion(); // last old reading
+        }
+        if (gyrs.size()) {
+            gyr = gyrs[gyrs.size()-1]; // most recent reading
+        } else {
+            gyr = dataChannelService->imuGetGyroscope(); // last old reading
+        }
+        if (accs.size()) {
+            acc = accs[accs.size()-1]; // most recent reading
+        } else {
+            acc = dataChannelService->imuGetLinearAcceleration(); // last old reading
+        }
+        //
+        // Publication:
+        sensor_msgs::msg::Imu* imuMsg = new sensor_msgs::msg::Imu(); // publish() will take ownership later
+        // Orientation
+        if(rosCoordinateSystem) {
+            imuMsg->orientation.x = tsq.x();
+            imuMsg->orientation.y = -tsq.z();
+            imuMsg->orientation.z = tsq.y();
+        } else {
+            imuMsg->orientation.x = tsq.x();
+            imuMsg->orientation.y = tsq.y();
+            imuMsg->orientation.z = tsq.z();
+        }
+        imuMsg->orientation.w = tsq.w();
+        for (int i=0; i<9; ++i) { // should at least get variance diagonal from datasheet ...
+            imuMsg->orientation_covariance[i] = 0.0;
+        }
+        // Angular velocity (gyroscope)
+        if(rosCoordinateSystem) {
+            imuMsg->angular_velocity.x = gyr.x();
+            imuMsg->angular_velocity.y = -gyr.z();
+            imuMsg->angular_velocity.z = gyr.y();
+        } else {
+            imuMsg->angular_velocity.x = gyr.x();
+            imuMsg->angular_velocity.y = gyr.y();
+            imuMsg->angular_velocity.z = gyr.z();
+        }
+        for (int i=0; i<9; ++i) { // should at least get variance diagonal from datasheet ...
+            imuMsg->angular_velocity_covariance[i] = 0.0;
+        }
+        // Linear acceleration
+        if(rosCoordinateSystem) {
+            imuMsg->linear_acceleration.x = acc.x();
+            imuMsg->linear_acceleration.y = -acc.z();
+            imuMsg->linear_acceleration.z = acc.y();
+        } else {
+            imuMsg->linear_acceleration.x = acc.x();
+            imuMsg->linear_acceleration.y = acc.y();
+            imuMsg->linear_acceleration.z = acc.z();
+        }
+        for (int i=0; i<9; ++i) { // should at least get variance diagonal from datasheet ...
+            imuMsg->linear_acceleration_covariance[i] = 0.0;
+        }
+        // Metadata
+        if(rosTimestamps) {
+            rclcpp::Time timeNow = this->get_clock()->now();
+            imuMsg->header.stamp = timeNow;
+        } else {
+            int secs = 0, microsecs = 0;
+            tsq.getTimestamp(secs, microsecs); // this should use some consensus of all sensor channels
+            imuMsg->header.stamp = rclcpp::Time(secs, microsecs*1000);
+        }
+        // Send
+        imuPublisher->publish(sensor_msgs::msg::Imu::UniquePtr(imuMsg));
+    }
 }
 
 void StereoNode::stereoIteration() {
@@ -835,8 +950,8 @@ rcl_interfaces::msg::SetParametersResult StereoNode::onSetParameters(std::vector
                     result.successful &= true;
                 } else if (name == "top_level_frame") {
                     // TODO Frame name validation to only accept what ROS2 expects
-                    frame = parameter.as_string();
-                    currentTransform.header.frame_id = frame;
+                    topLevelFrame = parameter.as_string();
+                    currentTransform.header.frame_id = topLevelFrame;
                 } else if (name == "internal_frame") {
                     // TODO Frame name validation to only accept what ROS2 expects
                     internalFrame = parameter.as_string();

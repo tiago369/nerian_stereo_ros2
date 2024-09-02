@@ -31,6 +31,9 @@
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <geometry_msgs/msg/quaternion.hpp>
+#include <geometry_msgs/msg/vector3.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2_ros/transform_broadcaster.h>
@@ -113,6 +116,11 @@ public:
         debugMessagesParameters = enable;
     }
 
+    /*
+     * \brief Publishes current readings of the inertial measurement unit (IMU), transformed according to ros_coordinate_system.
+     */
+    void publishImuData();
+
 private:
     enum PointCloudColorMode {
         RGB_SEPARATE,
@@ -127,6 +135,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rightImagePublisher;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr thirdImagePublisher;
     rclcpp::Publisher<nerian_stereo::msg::StereoCameraInfo>::SharedPtr cameraInfoPublisher;
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imuPublisher;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> transformBroadcaster;
 
@@ -148,6 +157,7 @@ private:
         "ros_coordinate_system",
         "ros_timestamps",
         "delay_execution",
+        "broadcast_transform",
     };
 
     // Handler for external parameter change attempts
@@ -160,12 +170,14 @@ private:
     bool rosCoordinateSystem;
     bool rosTimestamps;
     std::string remotePort;
-    std::string frame; // outer frame (e.g. world)
+    std::string topLevelFrame; // outer frame (e.g. world)
     std::string internalFrame; // our private frame / Transform we publish
     std::string remoteHost;
     double execDelay;
     double maxDepth;
     PointCloudColorMode pointCloudColorMode;
+    bool broadcastTransform;
+    bool publishImuDataActive;
 
     // Other members
     int frameNum;
@@ -233,7 +245,7 @@ private:
     /**
      * \brief Publishes the camera info once per second
      */
-    void publishCameraInfo(rclcpp::Time stamp, const ImageSet& imageSet);
+    void publishCameraInfo(rclcpp::Time stamp);
 
     /**
      * \brief Timer callback that polls the image and data channel receivers

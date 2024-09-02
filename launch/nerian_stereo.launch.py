@@ -9,12 +9,14 @@ def generate_launch_description():
                 parameters=[
                     {'remote_host':                  '192.168.10.10'},
                     {'remote_port':                  '7681'},
-                    {'use_tcp':                       False},
+                    {'use_tcp':                       False}, # *Must* match 'Network Settings'! (web interface)
 
                     {'top_level_frame':               'world'},
                     {'internal_frame':                'nerian_stereo'},
-                    {'ros_coordinate_system':         True},
-                    {'ros_timestamps':                True},
+                    {'ros_coordinate_system':         True}, # Affects point cloud as well as IMU axes
+                    {'ros_timestamps':                True}, # False => use device-reported timestamps everywhere
+                    {'broadcast_transform':           True}, # Transform (orientation from IMU, or dummy for IMU-less device)
+                    {'publish_imu_data':              True}, # Raw IMU readings
 
                     {'max_depth':                     -1},
                     {'point_cloud_intensity_channel': 'rgb8'},
